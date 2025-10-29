@@ -51,13 +51,12 @@ public final class NetworkService: Networkable, @unchecked Sendable {
 
     public func sendRequest<T>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError> where T: Decodable & Sendable {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
-            preconditionFailure("Failed URLRequest")
+            return Fail(error: .invalidURL).eraseToAnyPublisher()
         }
-        return URLSession.shared.dataTaskPublisher(for: urlRequest)
-            .subscribe(on: DispatchQueue.global(qos: .background))
+        return session.dataTaskPublisher(for: urlRequest)
             .tryMap { data, response -> Data in
-                guard let response = response as? HTTPURLResponse, 200...299 ~= response.statusCode else {
-                    throw NetworkError.invalidURL
+                guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
+                    throw NetworkError.unexpectedStatusCode
                 }
                 return data
             }
@@ -65,8 +64,8 @@ public final class NetworkService: Networkable, @unchecked Sendable {
             .mapError { error -> NetworkError in
                 if error is DecodingError {
                     return NetworkError.decode
-                } else if let error = error as? NetworkError {
-                    return error
+                } else if let netError = error as? NetworkError {
+                    return netError
                 } else {
                     return NetworkError.unknown
                 }
@@ -76,7 +75,7 @@ public final class NetworkService: Networkable, @unchecked Sendable {
 
     public func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
-            throw NetworkError.decode
+            throw NetworkError.invalidURL
         }
         return try await withCheckedThrowingContinuation { continuation in
             let task = URLSession(configuration: .default, delegate: nil, delegateQueue: .main)
@@ -109,14 +108,15 @@ public final class NetworkService: Networkable, @unchecked Sendable {
         resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
     ) {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
+            resultHandler(.failure(.invalidURL))
             return
         }
-        let urlTask = URLSession.shared.dataTask(with: urlRequest) { data, response, error in
-            guard error == nil else {
-                resultHandler(.failure(.invalidURL))
+        let urlTask = session.dataTask(with: urlRequest) { data, response, error in
+            if error != nil {
+                resultHandler(.failure(.unknown))
                 return
             }
-            guard let response = response as? HTTPURLResponse, 200...299 ~= response.statusCode else {
+            guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
                 resultHandler(.failure(.unexpectedStatusCode))
                 return
             }
@@ -124,22 +124,19 @@ public final class NetworkService: Networkable, @unchecked Sendable {
                 resultHandler(.failure(.unknown))
                 return
             }
-            guard let decodedResponse = try? JSONDecoder().decode(T.self, from: data) else {
+            do {
+                let decodedResponse = try JSONDecoder().decode(T.self, from: data)
+                resultHandler(.success(decodedResponse))
+            } catch {
                 resultHandler(.failure(.decode))
-                return
             }
-            resultHandler(.success(decodedResponse))
         }
         urlTask.resume()
     }
 
-    public init() {
+    // MARK: - Private Helper Methods
 
-    }
-}
-
-extension Networkable {
-    fileprivate func createRequest(endPoint: EndPoint) -> URLRequest? {
+    private func createRequest(endPoint: EndPoint) -> URLRequest? {
         var urlComponents = URLComponents()
         urlComponents.scheme = endPoint.scheme
         urlComponents.host = endPoint.host
