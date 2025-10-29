@@ -7,10 +7,12 @@
 
 import Foundation
 
-public enum RequestMethod: String {
+/// HTTP request methods supported by the networking layer
+/// Conforms to Sendable for safe concurrent usage
+public enum RequestMethod: String, Sendable {
     case get = "GET"
     case post = "POST"
     case put = "PUT"
-    case PATCH = "PATCH"
+    case patch = "PATCH"
     case delete = "DELETE"
 }

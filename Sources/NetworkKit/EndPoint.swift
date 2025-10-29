@@ -7,7 +7,9 @@
 
 import Foundation
 
-public protocol EndPoint {
+/// Protocol defining network endpoint configuration
+/// Conforming types must be Sendable for safe concurrent usage
+public protocol EndPoint: Sendable {
     var host: String { get }
     var scheme: String { get }
     var path: String { get }
