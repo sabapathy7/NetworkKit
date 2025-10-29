@@ -5,43 +5,103 @@
 //  Created by kanagasabapathy on 01/01/24.
 //
 
-import Combine
-import Foundation
+@_exported import Combine
+@_exported import Foundation
 
-public protocol Networkable {
-    func sendRequest<T: Decodable>(urlStr: String) async throws -> T
-    func sendRequest<T: Decodable>(endpoint: EndPoint) async throws -> T
-    func sendRequest<T: Decodable>(endpoint: EndPoint, resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void)
-    func sendRequest<T: Decodable>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError>
+/// Main networking protocol with full Swift 6 concurrency support
+///
+/// This protocol provides two API styles:
+/// - async/await: Modern Swift concurrency (inherits caller's isolation)
+/// - Closures: Legacy callback-based API
+///
+/// All generic types are constrained to Sendable for safe concurrent usage.
+///
+public protocol Networkable: Sendable {
+
+    /// Sends a network request using a URL string
+    /// - Parameter urlStr: The URL string to request
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    /// - Note: Inherits caller's isolation context (SE-0461)
+    func sendRequest<T: Decodable & Sendable>(urlStr: String) async throws -> T
+
+    /// Sends a network request and returns a Combine publisher
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - type: The type to decode the response into
+    /// - Returns: Publisher that emits the decoded response or NetworkError
+    func sendRequest<T>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError> where T: Decodable & Sendable
+
+    /// Bridging callbacks to async/await with continuation
+    /// Demonstrates bridging callback-based APIs to async/await
+    /// Useful pattern for wrapping legacy APIs without native async support
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    func sendRequestWithContinuation<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
+
+    /// Sends a network request using an endpoint configuration
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    /// - Note: Inherits caller's isolation context (SE-0461)
+    func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
+
+    /// Sends a network request with a completion handler
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - resultHandler: Sendable completion handler called with the result
+    func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint, resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void)
 }
 
-public final class NetworkService: Networkable {
-    public func sendRequest<T>(urlStr: String) async throws -> T where T : Decodable {
-        guard let urlStr = urlStr as String?, let url = URL(string: urlStr) as URL?else {
-            throw NetworkError.invalidURL
-        }
-        let (data, response) = try await URLSession.shared.data(from: url)
-        guard let response = response as? HTTPURLResponse, 200...299 ~= response.statusCode else {
-            throw NetworkError.unexpectedStatusCode
-        }
-        guard let data = data as Data? else {
-            throw NetworkError.unknown
-        }
-        guard let decodedResponse = try? JSONDecoder().decode(T.self, from: data) else {
-            throw NetworkError.decode
-        }
-        return decodedResponse
+/// Default implementation of the Networkable protocol
+/// Thread-safe and Sendable-conformant for concurrent usage
+public final class NetworkService: Networkable, @unchecked Sendable {
+    // Immutable URLSession for thread-safety
+    private let session: URLSession
+
+    /// Initializes a new NetworkService with default configuration
+    public convenience init() {
+        self.init(configuration: .default)
     }
 
-    public func sendRequest<T>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError> where T: Decodable {
-        guard let urlRequest = createRequest(endPoint: endpoint) else {
-            preconditionFailure("Failed URLRequest")
+    /// Initializes a new NetworkService
+    /// - Parameter configuration: URLSession configuration
+    public init(configuration: URLSessionConfiguration) {
+        self.session = URLSession(configuration: configuration)
+    }
+
+    /// Sends a network request using a URL string
+    /// Inherits caller's isolation context (SE-0461)
+    public func sendRequest<T>(urlStr: String) async throws -> T where T: Decodable & Sendable {
+        guard let url = URL(string: urlStr) else {
+            throw NetworkError.invalidURL
         }
-        return URLSession.shared.dataTaskPublisher(for: urlRequest)
-            .subscribe(on: DispatchQueue.global(qos: .background))
+        let (data, response) = try await session.data(from: url)
+        guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
+            throw NetworkError.unexpectedStatusCode
+        }
+        do {
+            let decodedResponse = try JSONDecoder().decode(T.self, from: data)
+            return decodedResponse
+        } catch {
+            throw NetworkError.decode
+        }
+    }
+
+    /// Sends a network request and returns a Combine publisher
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - type: The type to decode the response into
+    /// - Returns: Publisher that emits the decoded response or NetworkError
+    public func sendRequest<T>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError> where T: Decodable & Sendable {
+        guard let urlRequest = createRequest(endPoint: endpoint) else {
+            return Fail(error: .invalidURL).eraseToAnyPublisher()
+        }
+        return session.dataTaskPublisher(for: urlRequest)
             .tryMap { data, response -> Data in
-                guard let response = response as? HTTPURLResponse, 200...299 ~= response.statusCode else {
-                    throw NetworkError.invalidURL
+                guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
+                    throw NetworkError.unexpectedStatusCode
                 }
                 return data
             }
@@ -49,8 +109,8 @@ public final class NetworkService: Networkable {
             .mapError { error -> NetworkError in
                 if error is DecodingError {
                     return NetworkError.decode
-                } else if let error = error as? NetworkError {
-                    return error
+                } else if let netError = error as? NetworkError {
+                    return netError
                 } else {
                     return NetworkError.unknown
                 }
@@ -58,9 +118,15 @@ public final class NetworkService: Networkable {
             .eraseToAnyPublisher()
     }
 
-    public func sendRequest<T: Decodable>(endpoint: EndPoint) async throws -> T {
+    /// Bridging callbacks to async/await with continuation
+    /// Demonstrates bridging callback-based APIs to async/await
+    /// Useful pattern for wrapping legacy APIs without native async support
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    public func sendRequestWithContinuation<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
-            throw NetworkError.decode
+            throw NetworkError.invalidURL
         }
         return try await withCheckedThrowingContinuation { continuation in
             let task = URLSession(configuration: .default, delegate: nil, delegateQueue: .main)
@@ -78,28 +144,56 @@ public final class NetworkService: Networkable {
                         continuation.resume(throwing: NetworkError.unknown)
                         return
                     }
-                    guard let decodedResponse = try? JSONDecoder().decode(T.self, from: data) else {
+                    // Decode response
+                    do {
+                        let decoded = try JSONDecoder().decode(T.self, from: data)
+                        continuation.resume(returning: decoded)
+                    } catch {
                         continuation.resume(throwing: NetworkError.decode)
-                        return
                     }
-                    continuation.resume(returning: decodedResponse)
                 }
             task.resume()
         }
     }
 
-    public func sendRequest<T: Decodable>(endpoint: EndPoint,
-                                          resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void) {
-
+    /// Sends a network request using an endpoint configuration
+    /// Inherits caller's isolation context (SE-0461)
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    public func sendRequest<T>(endpoint: any EndPoint) async throws -> T where T : Decodable, T : Sendable {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
+            throw NetworkError.invalidURL
+        }
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
+            throw NetworkError.unexpectedStatusCode
+        }
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw NetworkError.decode
+        }
+    }
+
+    /// Sends a network request with a completion handler
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - resultHandler: Sendable completion handler called with the result
+    public func sendRequest<T: Decodable & Sendable>(
+        endpoint: EndPoint,
+        resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
+    ) {
+        guard let urlRequest = createRequest(endPoint: endpoint) else {
+            resultHandler(.failure(.invalidURL))
             return
         }
-        let urlTask = URLSession.shared.dataTask(with: urlRequest) { data, response, error in
-            guard error == nil else {
-                resultHandler(.failure(.invalidURL))
+        let urlTask = session.dataTask(with: urlRequest) { data, response, error in
+            if error != nil {
+                resultHandler(.failure(.unknown))
                 return
             }
-            guard let response = response as? HTTPURLResponse, 200...299 ~= response.statusCode else {
+            guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
                 resultHandler(.failure(.unexpectedStatusCode))
                 return
             }
@@ -107,22 +201,22 @@ public final class NetworkService: Networkable {
                 resultHandler(.failure(.unknown))
                 return
             }
-            guard let decodedResponse = try? JSONDecoder().decode(T.self, from: data) else {
+            do {
+                let decodedResponse = try JSONDecoder().decode(T.self, from: data)
+                resultHandler(.success(decodedResponse))
+            } catch {
                 resultHandler(.failure(.decode))
-                return
             }
-            resultHandler(.success(decodedResponse))
         }
         urlTask.resume()
     }
 
-    public init() {
+    // MARK: - Private Helper Methods
 
-    }
-}
-
-extension Networkable {
-    fileprivate func createRequest(endPoint: EndPoint) -> URLRequest? {
+    /// Creates a URLRequest from an EndPoint configuration
+    /// - Parameter endPoint: The endpoint configuration
+    /// - Returns: A configured URLRequest, or nil if the URL is invalid
+    private func createRequest(endPoint: EndPoint) -> URLRequest? {
         var urlComponents = URLComponents()
         urlComponents.scheme = endPoint.scheme
         urlComponents.host = endPoint.host

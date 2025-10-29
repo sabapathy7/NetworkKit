@@ -7,7 +7,9 @@
 
 import Foundation
 
-public enum NetworkError: Error {
+/// Network-related errors that can occur during request processing
+/// Conforms to Sendable for safe concurrent usage
+public enum NetworkError: Error, Sendable {
     case decode
     case generic
     case invalidURL
@@ -30,7 +32,7 @@ public enum NetworkError: Error {
             return "Unauthorized URL"
         case .unexpectedStatusCode:
             return "Status Code Error"
-        default:
+        case .unknown:
             return "Unknown Error"
         }
     }
