@@ -8,9 +8,51 @@
 @_exported import Combine
 @_exported import Foundation
 
+/// Main networking protocol with full Swift 6 concurrency support
+///
+/// This protocol provides two API styles:
+/// - async/await: Modern Swift concurrency (inherits caller's isolation)
+/// - Closures: Legacy callback-based API
+///
+/// All generic types are constrained to Sendable for safe concurrent usage.
+///
+/// Note: Combine support is available on NetworkService but not part of the protocol
+/// due to Swift 6 limitations with generic associated types in protocols.
 public protocol Networkable: Sendable {
+
+    /// Sends a network request using a URL string
+    /// - Parameter urlStr: The URL string to request
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    /// - Note: Inherits caller's isolation context (SE-0461)
     func sendRequest<T: Decodable & Sendable>(urlStr: String) async throws -> T
+
+    /// Sends a network request and returns a Combine publisher
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - type: The type to decode the response into
+    /// - Returns: Publisher that emits the decoded response or NetworkError
+    func sendRequest<T>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError> where T: Decodable & Sendable
+
+    /// Bridging callbacks to async/await with continuation
+    /// Demonstrates bridging callback-based APIs to async/await
+    /// Useful pattern for wrapping legacy APIs without native async support
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    func sendRequestWithContinuation<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
+
+    /// Sends a network request using an endpoint configuration
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
+    /// - Note: Inherits caller's isolation context (SE-0461)
     func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
+
+    /// Sends a network request with a completion handler
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - resultHandler: Sendable completion handler called with the result
     func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint, resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void)
 }
 
@@ -49,6 +91,11 @@ public final class NetworkService: Networkable, @unchecked Sendable {
         }
     }
 
+    /// Sends a network request and returns a Combine publisher
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - type: The type to decode the response into
+    /// - Returns: Publisher that emits the decoded response or NetworkError
     public func sendRequest<T>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError> where T: Decodable & Sendable {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
             return Fail(error: .invalidURL).eraseToAnyPublisher()
@@ -73,6 +120,12 @@ public final class NetworkService: Networkable, @unchecked Sendable {
             .eraseToAnyPublisher()
     }
 
+    /// Bridging callbacks to async/await with continuation
+    /// Demonstrates bridging callback-based APIs to async/await
+    /// Useful pattern for wrapping legacy APIs without native async support
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
     public func sendRequestWithContinuation<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
             throw NetworkError.invalidURL
@@ -105,6 +158,11 @@ public final class NetworkService: Networkable, @unchecked Sendable {
         }
     }
 
+    /// Sends a network request using an endpoint configuration
+    /// Inherits caller's isolation context (SE-0461)
+    /// - Parameter endpoint: The endpoint configuration
+    /// - Returns: Decoded response of type T
+    /// - Throws: NetworkError if the request fails
     public func sendRequest<T>(endpoint: any EndPoint) async throws -> T where T : Decodable, T : Sendable {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
             throw NetworkError.invalidURL
@@ -119,6 +177,11 @@ public final class NetworkService: Networkable, @unchecked Sendable {
             throw NetworkError.decode
         }
     }
+
+    /// Sends a network request with a completion handler
+    /// - Parameters:
+    ///   - endpoint: The endpoint configuration
+    ///   - resultHandler: Sendable completion handler called with the result
     public func sendRequest<T: Decodable & Sendable>(
         endpoint: EndPoint,
         resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
@@ -152,6 +215,9 @@ public final class NetworkService: Networkable, @unchecked Sendable {
 
     // MARK: - Private Helper Methods
 
+    /// Creates a URLRequest from an EndPoint configuration
+    /// - Parameter endPoint: The endpoint configuration
+    /// - Returns: A configured URLRequest, or nil if the URL is invalid
     private func createRequest(endPoint: EndPoint) -> URLRequest? {
         var urlComponents = URLComponents()
         urlComponents.scheme = endPoint.scheme
