@@ -5,8 +5,8 @@
 //  Created by kanagasabapathy on 01/01/24.
 //
 
-import Combine
-import Foundation
+@_exported import Combine
+@_exported import Foundation
 
 public protocol Networkable {
     func sendRequest<T: Decodable>(urlStr: String) async throws -> T
