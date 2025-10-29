@@ -73,7 +73,7 @@ public final class NetworkService: Networkable, @unchecked Sendable {
             .eraseToAnyPublisher()
     }
 
-    public func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T {
+    public func sendRequestWithContinuation<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T {
         guard let urlRequest = createRequest(endPoint: endpoint) else {
             throw NetworkError.invalidURL
         }
@@ -93,16 +93,32 @@ public final class NetworkService: Networkable, @unchecked Sendable {
                         continuation.resume(throwing: NetworkError.unknown)
                         return
                     }
-                    guard let decodedResponse = try? JSONDecoder().decode(T.self, from: data) else {
+                    // Decode response
+                    do {
+                        let decoded = try JSONDecoder().decode(T.self, from: data)
+                        continuation.resume(returning: decoded)
+                    } catch {
                         continuation.resume(throwing: NetworkError.decode)
-                        return
                     }
-                    continuation.resume(returning: decodedResponse)
                 }
             task.resume()
         }
     }
 
+    public func sendRequest<T>(endpoint: any EndPoint) async throws -> T where T : Decodable, T : Sendable {
+        guard let urlRequest = createRequest(endPoint: endpoint) else {
+            throw NetworkError.invalidURL
+        }
+        let (data, response) = try await session.data(for: urlRequest)
+        guard let httpResponse = response as? HTTPURLResponse, 200...299 ~= httpResponse.statusCode else {
+            throw NetworkError.unexpectedStatusCode
+        }
+        do {
+            return try JSONDecoder().decode(T.self, from: data)
+        } catch {
+            throw NetworkError.decode
+        }
+    }
     public func sendRequest<T: Decodable & Sendable>(
         endpoint: EndPoint,
         resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
