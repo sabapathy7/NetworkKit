@@ -16,8 +16,6 @@
 ///
 /// All generic types are constrained to Sendable for safe concurrent usage.
 ///
-/// Note: Combine support is available on NetworkService but not part of the protocol
-/// due to Swift 6 limitations with generic associated types in protocols.
 public protocol Networkable: Sendable {
 
     /// Sends a network request using a URL string
