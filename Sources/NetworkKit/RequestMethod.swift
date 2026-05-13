@@ -7,10 +7,10 @@
 
 import Foundation
 
-public enum RequestMethod: String {
+public enum RequestMethod: String, Sendable {
+    case delete = "DELETE"
     case get = "GET"
+    case patch = "PATCH"
     case post = "POST"
     case put = "PUT"
-    case PATCH = "PATCH"
-    case delete = "DELETE"
 }

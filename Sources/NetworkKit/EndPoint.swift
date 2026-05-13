@@ -7,7 +7,7 @@
 
 import Foundation
 
-public protocol EndPoint {
+public protocol EndPoint: Sendable {
     var host: String { get }
     var scheme: String { get }
     var path: String { get }
