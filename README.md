@@ -1,54 +1,112 @@
-## NetworkKit
+# NetworkKit
 
-Elevate your iOS app’s connectivity with NetworkKit – a powerful, modular network layer designed to seamlessly integrate the latest in Swift’s networking capabilities, including Combine Framework, Async/Await, and Closures.
+Elevate your app’s connectivity with NetworkKit — a small, modular network layer that supports **Combine** (on Apple platforms), **async/await**, **`withCheckedThrowingContinuation`**, and **closures**, with **Swift concurrency** (`Sendable`, strict concurrency checks) in mind.
 
-### 📖 Full Tutorial
+## Requirements
 
-Dive deep into NetworkKit with the [full tutorial on Medium.](https://sabapathy7.medium.com/how-to-create-a-network-layer-for-your-ios-app-623f99161677)
+- **Swift:** 5.9+
+- **Platforms:** iOS 15+, macOS 12+, watchOS 8+, tvOS 15+, visionOS 1+
 
-### 🚀 Example Usage
+Combine-backed APIs are available only where **Combine** exists (Apple platforms). The core protocol and async/closure APIs build on **Linux** and other environments without Combine.
 
-Check out how to use NetworkKit in real-world applications:
+## Features
 
-• [iOS Network Example](https://github.com/sabapathyk7/iOSNetworkExample)
+- **Combine** — `NetworkService.sendRequest(endpoint:type:)` returns `AnyPublisher` (Apple platforms only).
+- **Async/await (native URLSession)** — `sendRequest(urlStr:)` uses `URLSession`’s async `data(from:)`.
+- **Async/await + continuation** — `sendRequest(endpoint:)` bridges `URLSession.dataTask` with `withCheckedThrowingContinuation`.
+- **Closures** — `sendRequest(endpoint:resultHandler:)` with a `@Sendable` completion handler.
+- **Injectable session** — `NetworkService(configuration:)` for tests (e.g. custom `URLSessionConfiguration` / `URLProtocol`).
 
-• [SOLID Principles Example](https://github.com/sabapathyk7/SOLIDPrinciplesExample)
+## Installation (Swift Package Manager)
 
-• [Force Update App Example](https://github.com/sabapathyk7/ForceUpdateExample)
+**Xcode:** File → Add Package Dependencies… → enter the repository URL.
 
-### ✨ Features
+**`Package.swift`:**
 
-**• Combine Framework Integration**
+```swift
+.package(url: "https://github.com/sabapathy7/NetworkKit.git", from: "1.0.8")
+```
 
- Leverage the power of Combine to streamline asynchronous operations and handle complex data flows effortlessly.
- 
-**• Async/Await Support**
+Use the [Releases](https://github.com/sabapathy7/NetworkKit/releases) page and set `from:` to the lowest version you support (or pin an exact revision if you prefer).
 
-Embrace modern Swift programming with async/await, simplifying asynchronous code and making your networking logic cleaner and more readable.
+## Usage overview
 
-**• Closures for Flexibility**
+Define types that conform to `EndPoint`, then use `NetworkService`:
 
-Customize your networking calls with closures, offering a flexible and modular approach to handle responses, errors, and more.
+```swift
+import NetworkKit
 
+let service = NetworkService()
 
-### 📚 Code Examples
+// Async/await — URL string (native URLSession)
+let dict: [String: String] = try await service.sendRequest(urlStr: "https://api.example.com/v1/config")
 
-    public protocol Networkable {
-       func sendRequest<T: Decodable>(endpoint: EndPoint) async throws -> T
-       func sendRequest<T: Decodable>(endpoint: EndPoint, resultHandler: @escaping (Result<T, NetworkError>) -> Void)
-       func sendRequest<T: Decodable>(endpoint: EndPoint, type: T.Type) -> AnyPublisher<T, NetworkError>
+// Async/await — endpoint (withCheckedThrowingContinuation + dataTask)
+let user: User = try await service.sendRequest(endpoint: UserEndpoint.profile)
+
+// Closure
+service.sendRequest(endpoint: UserEndpoint.profile) { (result: Result<User, NetworkError>) in
+    switch result {
+    case .success(let user): print(user)
+    case .failure(let error): print(error.customMessage)
     }
+}
 
-### 🛠️ Installation
+#if canImport(Combine)
+import Combine
 
-Add NetworkKit to your project using Swift Package Manager:
-https://github.com/sabapathyk7/NetworkKit.git
+// Combine (Apple platforms)
+var cancellables = Set<AnyCancellable>()
+service.sendRequest(endpoint: UserEndpoint.profile, type: User.self)
+    .sink(receiveCompletion: { _ in }, receiveValue: { print($0) })
+    .store(in: &cancellables)
+#endif
+```
 
-### 🤝 Contributions
+### Protocol surface
 
-Have ideas or improvements? Feel free to submit issues or pull requests to help enhance NetworkKit.
+`Networkable` covers URL async, endpoint async, and the closure API. The Combine publisher lives on **`NetworkService`** so the protocol stays portable without Combine:
 
-### 🔗 Connect with Me
+```swift
+public protocol Networkable: Sendable {
+    func sendRequest<T: Decodable & Sendable>(urlStr: String) async throws -> T
+    func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
+    func sendRequest<T: Decodable & Sendable>(
+        endpoint: EndPoint,
+        resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
+    )
+}
+```
 
-Stay updated on the latest features and releases by following me on [LinkedIn](https://www.linkedin.com/in/sabapathy7/).
+## Develop and test locally
 
+```bash
+git clone https://github.com/sabapathy7/NetworkKit.git
+cd NetworkKit
+swift build
+swift test
+```
+
+## Ecosystem
+
+- **Swift Package Index:** [sabapathy7/NetworkKit](https://swiftpackageindex.com/sabapathy7/NetworkKit)
+- **Repository:** [github.com/sabapathy7/NetworkKit](https://github.com/sabapathy7/NetworkKit)
+
+## Full tutorial and examples
+
+- [Tutorial on Medium](https://sabapathy7.medium.com/how-to-create-a-network-layer-for-your-ios-app-623f99161677)
+- [iOS Network Example](https://github.com/sabapathyk7/iOSNetworkExample)
+- [SOLID Principles Example](https://github.com/sabapathyk7/SOLIDPrinciplesExample)
+- [Force Update App Example](https://github.com/sabapathyk7/ForceUpdateExample)
+
+## Contributions
+
+Issues and pull requests are welcome on [GitHub](https://github.com/sabapathy7/NetworkKit).
+
+## Connect
+
+[Kanagasabapathy on LinkedIn](https://www.linkedin.com/in/sabapathy7/)
+
+## License
+
+MIT — see [LICENSE](LICENSE).
