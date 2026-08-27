@@ -26,6 +26,12 @@ let package = Package(
             dependencies: ["NetworkKit"],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")
+            ]),
+        .testTarget(
+            name: "NetworkKit_SwiftTest",
+            dependencies: ["NetworkKit"],
+            swiftSettings: [
+                .enableUpcomingFeature("StrictConcurrency")
             ])
     ]
 )
