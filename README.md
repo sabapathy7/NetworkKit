@@ -1,6 +1,6 @@
 # NetworkKit
 
-Elevate your app’s connectivity with NetworkKit — a small, modular network layer that supports **Combine** (on Apple platforms), **async/await**, **`withCheckedThrowingContinuation`**, and **closures**, with **Swift concurrency** (`Sendable`, strict concurrency checks) in mind.
+Elevate your app’s connectivity with NetworkKit — a small, modular network layer that supports **Combine** (on Apple platforms), **async/await**, **closures**, and a **legacy callback bridge**, with **Swift concurrency** in mind.
 
 ## Requirements
 
@@ -11,10 +11,11 @@ Combine-backed APIs are available only where **Combine** exists (Apple platforms
 
 ## Features
 
-- **Combine** — `NetworkService.sendRequest(endpoint:type:)` returns `AnyPublisher` (Apple platforms only).
-- **Async/await (native URLSession)** — `sendRequest(urlStr:)` uses `URLSession`’s async `data(from:)`.
-- **Async/await + continuation** — `sendRequest(endpoint:)` bridges `URLSession.dataTask` with `withCheckedThrowingContinuation`.
-- **Closures** — `sendRequest(endpoint:resultHandler:)` with a `@Sendable` completion handler.
+- **Combine** — `NetworkService.sendRequestUsingCombine(endpoint:type:)` returns `AnyPublisher` (Apple platforms only).
+- **Async/await — URL string** — `sendRequestUsingURLString(_:)` for a one-off raw URL.
+- **Async/await — endpoint** — `sendRequestUsingEndpoint(endpoint:)` for a structured `EndPoint`.
+- **Legacy callback** — `sendRequestUsingLegacyCallbackAPI(endpoint:resultHandler:)` with a `@Sendable` completion handler, for callers not yet on async/await.
+- **Adapters & retry** — `RequestAdapting` mutates each request before it is sent (e.g. auth tokens); `RequestRetrying` decides whether a failure is retried, bounded by `maxRetryCount`.
 - **Injectable session** — `NetworkService(configuration:)` for tests (e.g. custom `URLSessionConfiguration` / `URLProtocol`).
 
 ## Installation (Swift Package Manager)
@@ -38,14 +39,14 @@ import NetworkKit
 
 let service = NetworkService()
 
-// Async/await — URL string (native URLSession)
-let dict: [String: String] = try await service.sendRequest(urlStr: "https://api.example.com/v1/config")
+// Async/await — raw URL string
+let dict: [String: String] = try await service.sendRequestUsingURLString("https://api.example.com/v1/config")
 
-// Async/await — endpoint (withCheckedThrowingContinuation + dataTask)
-let user: User = try await service.sendRequest(endpoint: UserEndpoint.profile)
+// Async/await — endpoint
+let user: User = try await service.sendRequestUsingEndpoint(endpoint: UserEndpoint.profile)
 
-// Closure
-service.sendRequest(endpoint: UserEndpoint.profile) { (result: Result<User, NetworkError>) in
+// Legacy callback
+service.sendRequestUsingLegacyCallbackAPI(endpoint: UserEndpoint.profile) { (result: Result<User, NetworkError>) in
     switch result {
     case .success(let user): print(user)
     case .failure(let error): print(error.customMessage)
@@ -57,7 +58,7 @@ import Combine
 
 // Combine (Apple platforms)
 var cancellables = Set<AnyCancellable>()
-service.sendRequest(endpoint: UserEndpoint.profile, type: User.self)
+service.sendRequestUsingCombine(endpoint: UserEndpoint.profile, type: User.self)
     .sink(receiveCompletion: { _ in }, receiveValue: { print($0) })
     .store(in: &cancellables)
 #endif
@@ -69,9 +70,9 @@ service.sendRequest(endpoint: UserEndpoint.profile, type: User.self)
 
 ```swift
 public protocol Networkable: Sendable {
-    func sendRequest<T: Decodable & Sendable>(urlStr: String) async throws -> T
-    func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
-    func sendRequest<T: Decodable & Sendable>(
+    func sendRequestUsingURLString<T: Decodable & Sendable>(_ urlStr: String) async throws -> T
+    func sendRequestUsingEndpoint<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
+    func sendRequestUsingLegacyCallbackAPI<T: Decodable & Sendable>(
         endpoint: EndPoint,
         resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
     )

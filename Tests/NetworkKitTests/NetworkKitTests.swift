@@ -51,14 +51,12 @@ final class NetworkServiceTests: XCTestCase {
             error: nil
         )
 
-        let result: [String: String] = try await networkService.sendRequest(
-            urlStr: "https://swiftpublished.com"
-        )
+        let result: [String: String] = try await networkService.sendRequestUsingURLString("https://swiftpublished.com")
 
         XCTAssertEqual(result["key"], "value")
     }
 
-    func testSendRequestWithEndpoint_Success() async throws {
+    func testSendRequestUsingEndpoint_Success() async throws {
         let expectedData = "{\"key\":\"value\"}".data(using: .utf8)!
         URLProtocolMock.mockResponse = MockResponse(
             data: expectedData,
@@ -70,14 +68,14 @@ final class NetworkServiceTests: XCTestCase {
             error: nil
         )
 
-        let result: [String: String] = try await networkService.sendRequest(
+        let result: [String: String] = try await networkService.sendRequestUsingEndpoint(
             endpoint: MockEndpoint()
         )
 
         XCTAssertEqual(result["key"], "value")
     }
 
-    func testSendRequestWithEndpoint_Failure() async {
+    func testSendRequestUsingEndpoint_Failure() async {
         URLProtocolMock.mockResponse = MockResponse(
             data: nil,
             response: nil,
@@ -85,7 +83,9 @@ final class NetworkServiceTests: XCTestCase {
         )
 
         do {
-            let _: [String: String] = try await networkService.sendRequest(endpoint: MockEndpoint())
+            let _: [String: String] = try await networkService.sendRequestUsingEndpoint(
+                endpoint: MockEndpoint()
+            )
             XCTFail("Expected to throw, but did not.")
         } catch {
             XCTAssertNotNil(error)
@@ -107,7 +107,7 @@ final class NetworkServiceTests: XCTestCase {
         )
 
         let expectation = self.expectation(description: "Closure should succeed")
-        networkService.sendRequest(endpoint: MockEndpoint()) { (result: Result<[String: String], NetworkError>) in
+        networkService.sendRequestUsingLegacyCallbackAPI(endpoint: MockEndpoint()) { (result: Result<[String: String], NetworkError>) in
             switch result {
             case .success(let data):
                 XCTAssertEqual(data["key"], "value")
@@ -128,7 +128,7 @@ final class NetworkServiceTests: XCTestCase {
         )
 
         let expectation = self.expectation(description: "Closure should fail")
-        networkService.sendRequest(endpoint: MockEndpoint()) { (result: Result<[String: String], NetworkError>) in
+        networkService.sendRequestUsingLegacyCallbackAPI(endpoint: MockEndpoint()) { (result: Result<[String: String], NetworkError>) in
             switch result {
             case .success:
                 XCTFail("Expected failure, got success")
@@ -157,7 +157,7 @@ final class NetworkServiceTests: XCTestCase {
         )
 
         let expectation = self.expectation(description: "Combine should succeed")
-        networkService.sendRequest(endpoint: MockEndpoint(), type: [String: String].self)
+        networkService.sendRequestUsingCombine(endpoint: MockEndpoint(), type: [String: String].self)
             .sink(receiveCompletion: { completion in
                 if case .failure(let error) = completion {
                     XCTFail("Expected success, got \(error)")
@@ -181,7 +181,7 @@ final class NetworkServiceTests: XCTestCase {
         let expectation = self.expectation(description: "Combine should fail")
         var receivedError: NetworkError?
 
-        networkService.sendRequest(endpoint: MockEndpoint(), type: TestModel.self)
+        networkService.sendRequestUsingCombine(endpoint: MockEndpoint(), type: TestModel.self)
             .sink(receiveCompletion: { completion in
                 if case .failure(let error) = completion {
                     receivedError = error

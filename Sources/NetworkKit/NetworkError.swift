@@ -7,7 +7,7 @@
 
 import Foundation
 
-public enum NetworkError: Error, Sendable {
+public enum NetworkError: Error, Sendable, Equatable {
     case decode
     case generic
     case invalidURL
