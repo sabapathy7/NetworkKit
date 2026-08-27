@@ -9,6 +9,7 @@
 import Combine
 #endif
 import Foundation
+import NetworkKitCore
 
 /// Async/await plus a completion-handler API for callers not yet on concurrency.
 /// Combine lives on `NetworkService` so this builds without Combine (e.g. Linux).

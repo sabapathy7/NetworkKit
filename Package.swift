@@ -15,21 +15,27 @@ let package = Package(
             name: "NetworkKit",
             targets: ["NetworkKit"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/sabapathy7/NetworkKitCore.git", from: "1.0.0")
+    ],
     targets: [
         .target(
             name: "NetworkKit",
+            dependencies: [
+                .product(name: "NetworkKitCore", package: "NetworkKitCore")
+            ],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")
             ]),
         .testTarget(
             name: "NetworkKitTests",
-            dependencies: ["NetworkKit"],
+            dependencies: ["NetworkKit", .product(name: "NetworkKitCore", package: "NetworkKitCore")],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")
             ]),
         .testTarget(
             name: "NetworkKit_SwiftTest",
-            dependencies: ["NetworkKit"],
+            dependencies: ["NetworkKit", .product(name: "NetworkKitCore", package: "NetworkKitCore")],
             swiftSettings: [
                 .enableUpcomingFeature("StrictConcurrency")
             ])

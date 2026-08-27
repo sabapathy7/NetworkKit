@@ -7,6 +7,7 @@
 
 import Foundation
 import Testing
+import NetworkKitCore
 @testable import NetworkKit
 
 extension MockedNetworkTests {
