@@ -48,3 +48,6 @@ secrets/
 .vscode/
 *.swp
 *.swo
+# Cursor plans (local only)
+.cursor/plans/
+*.plan.md

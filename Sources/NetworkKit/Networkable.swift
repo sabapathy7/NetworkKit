@@ -9,51 +9,168 @@
 import Combine
 #endif
 import Foundation
+import NetworkKitCore
 
-/// Main networking protocol offering multiple call styles:
-/// - **Async/await** (`sendRequest(urlStr:)` uses native `URLSession` async APIs)
-/// - **Async/await + `withCheckedThrowingContinuation`** (`sendRequest(endpoint:)` bridges `URLSession.dataTask`)
-/// - **Closures** (`sendRequest(endpoint:resultHandler:)`)
-/// - **Combine** (`NetworkService.sendRequest(endpoint:type:)`), only where Combine exists
-///
-/// The Combine method lives on `NetworkService` (not this protocol) so the protocol
-/// compiles on Linux and other platforms without Combine.
+/// Async/await plus a completion-handler API for callers not yet on concurrency.
+/// Combine lives on `NetworkService` so this builds without Combine (e.g. Linux).
 public protocol Networkable: Sendable {
-    /// Fetches and decodes a resource at the given URL string (native async `URLSession`).
-    func sendRequest<T: Decodable & Sendable>(urlStr: String) async throws -> T
-
-    /// Fetches and decodes a resource described by an `EndPoint` (async/await via `withCheckedThrowingContinuation`).
-    func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
-
-    /// Fetches and decodes a resource, delivering the result to a closure.
-    func sendRequest<T: Decodable & Sendable>(
+    func sendRequestUsingURLString<T: Decodable & Sendable>(_ urlStr: String) async throws -> T
+    func sendRequestUsingEndpoint<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T
+    func sendRequestUsingLegacyCallbackAPI<T: Decodable & Sendable>(
         endpoint: EndPoint,
         resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
     )
 }
 
-/// Concrete `Networkable` implementation backed by a `URLSession`.
-///
-/// `NetworkService` is safe to share across concurrency domains — all stored
-/// properties are immutable and `URLSession` is itself thread-safe.
-public final class NetworkService: Networkable, @unchecked Sendable {
+/// `URLSession`-backed `Networkable`. Safe to share: all stored state is immutable
+/// and `URLSession` is thread-safe.
+public final class NetworkService: Networkable {
 
     private let session: URLSession
+    private let adapters: [any RequestAdapting]
+    private let retrier: (any RequestRetrying)?
+    private let maxRetryCount: Int
 
-    /// Creates a service using the provided `URLSessionConfiguration`.
+    /// Pass a custom configuration (e.g. `protocolClasses`) for tests.
     ///
-    /// Pass a custom configuration (e.g. with `protocolClasses`) for testing.
-    public init(configuration: URLSessionConfiguration = .default) {
+    /// - Parameters:
+    ///   - adapters: Run in order against every request before it is sent.
+    ///   - retrier: Consulted when a request fails; `nil` disables retrying.
+    ///   - maxRetryCount: Hard ceiling on retries, so a retrier that always asks
+    ///     to retry cannot loop forever.
+    public init(configuration: URLSessionConfiguration = .default,
+                adapters: [any RequestAdapting] = [],
+                retrier: (any RequestRetrying)? = nil,
+                maxRetryCount: Int = 3) {
         self.session = URLSession(configuration: configuration)
+        self.adapters = adapters
+        self.retrier = retrier
+        self.maxRetryCount = maxRetryCount
     }
 
     // MARK: - Async/Await
 
-    public func sendRequest<T: Decodable & Sendable>(urlStr: String) async throws -> T {
+    /// Fetches and decodes a resource at a raw URL string.
+    public func sendRequestUsingURLString<T: Decodable & Sendable>(_ urlStr: String) async throws -> T {
         guard let url = URL(string: urlStr) else {
             throw NetworkError.invalidURL
         }
-        let (data, response) = try await session.data(from: url)
+        return try await withAdaptersAndRetry(URLRequest(url: url)) { urlRequest in
+            try await self.perform(urlRequest)
+        }
+    }
+
+    /// Fetches and decodes a resource described by an `EndPoint`.
+    public func sendRequestUsingEndpoint<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T {
+        guard let baseRequest = createRequest(endPoint: endpoint) else {
+            throw NetworkError.invalidURL
+        }
+        return try await withAdaptersAndRetry(baseRequest) { urlRequest in
+            try await self.perform(urlRequest)
+        }
+    }
+
+    // MARK: - Legacy callback
+
+    /// Completion-handler API for callers not yet using async/await.
+    ///
+    /// Sends via `URLSession.dataTask`, bridged with `withCheckedThrowingContinuation`
+    /// so it can still share the adapter and retry pipeline.
+    public func sendRequestUsingLegacyCallbackAPI<T: Decodable & Sendable>(
+        endpoint: EndPoint,
+        resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
+    ) {
+        guard let baseRequest = createRequest(endPoint: endpoint) else {
+            resultHandler(.failure(.invalidURL))
+            return
+        }
+        Task {
+            do {
+                let decoded: T = try await withAdaptersAndRetry(baseRequest) { urlRequest in
+                    try await self.performUsingContinuation(urlRequest)
+                }
+                resultHandler(.success(decoded))
+            } catch let error as NetworkError {
+                resultHandler(.failure(error))
+            } catch {
+                resultHandler(.failure(.unknown))
+            }
+        }
+    }
+
+    // MARK: - Combine (Apple platforms only)
+
+#if canImport(Combine)
+    /// Returns a Combine publisher that fetches and decodes a resource.
+    ///
+    /// Adapters and retrying do not apply here — the publisher must be returned
+    /// synchronously, so use the async/await or closure APIs when you need them.
+    public func sendRequestUsingCombine<T: Decodable & Sendable>(
+        endpoint: EndPoint,
+        type: T.Type
+    ) -> AnyPublisher<T, NetworkError> {
+        guard let urlRequest = createRequest(endPoint: endpoint) else {
+            return Fail(error: .invalidURL).eraseToAnyPublisher()
+        }
+        return session.dataTaskPublisher(for: urlRequest)
+            .tryMap { data, response -> Data in
+                guard let httpResponse = response as? HTTPURLResponse,
+                      200...299 ~= httpResponse.statusCode else {
+                    throw NetworkError.unexpectedStatusCode
+                }
+                return data
+            }
+            .decode(type: T.self, decoder: JSONDecoder())
+            .mapError { error -> NetworkError in
+                if error is DecodingError { return .decode }
+                if let netError = error as? NetworkError { return netError }
+                return .unknown
+            }
+            .eraseToAnyPublisher()
+    }
+#endif
+
+    // MARK: - Private Helpers
+
+    /// Runs `send` against an adapted request, consulting `retrier` on failure until
+    /// it declines or `maxRetryCount` is reached. Adapters re-run on every attempt,
+    /// so a refreshed token is picked up by the retry.
+    private func withAdaptersAndRetry<T: Sendable>(
+        _ baseRequest: URLRequest,
+        send: (URLRequest) async throws -> T
+    ) async throws -> T {
+        var attempt = 0
+        while true {
+            do {
+                var urlRequest = baseRequest
+                for adapter in adapters {
+                    urlRequest = try await adapter.adapt(urlRequest)
+                }
+                return try await send(urlRequest)
+            } catch {
+                guard attempt < maxRetryCount,
+                      let retrier,
+                      case .retryAfter(let delay) = await retrier.retry(for: baseRequest,
+                                                                       dueTo: error,
+                                                                       attempt: attempt)
+                else {
+                    throw error
+                }
+                attempt += 1
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+        }
+    }
+
+    /// Sends via `URLSession`'s native async API.
+    private func perform<T: Decodable & Sendable>(_ urlRequest: URLRequest) async throws -> T {
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw NetworkError.unknown
+        }
         guard let httpResponse = response as? HTTPURLResponse,
               200...299 ~= httpResponse.statusCode else {
             throw NetworkError.unexpectedStatusCode
@@ -65,11 +182,9 @@ public final class NetworkService: Networkable, @unchecked Sendable {
         }
     }
 
-    public func sendRequest<T: Decodable & Sendable>(endpoint: EndPoint) async throws -> T {
-        guard let urlRequest = createRequest(endPoint: endpoint) else {
-            throw NetworkError.invalidURL
-        }
-        return try await withCheckedThrowingContinuation { continuation in
+    /// Sends via `URLSession.dataTask`, bridged with `withCheckedThrowingContinuation`.
+    private func performUsingContinuation<T: Decodable & Sendable>(_ urlRequest: URLRequest) async throws -> T {
+        try await withCheckedThrowingContinuation { continuation in
             session.dataTask(with: urlRequest) { data, response, error in
                 if error != nil {
                     continuation.resume(throwing: NetworkError.unknown)
@@ -98,82 +213,18 @@ public final class NetworkService: Networkable, @unchecked Sendable {
         }
     }
 
-    // MARK: - Closure
-
-    public func sendRequest<T: Decodable & Sendable>(
-        endpoint: EndPoint,
-        resultHandler: @Sendable @escaping (Result<T, NetworkError>) -> Void
-    ) {
-        guard let urlRequest = createRequest(endPoint: endpoint) else {
-            resultHandler(.failure(.invalidURL))
-            return
-        }
-        session.dataTask(with: urlRequest) { data, response, error in
-            if error != nil {
-                resultHandler(.failure(.unknown))
-                return
-            }
-            guard let httpResponse = response as? HTTPURLResponse,
-                  200...299 ~= httpResponse.statusCode else {
-                resultHandler(.failure(.unexpectedStatusCode))
-                return
-            }
-            guard let data else {
-                resultHandler(.failure(.unknown))
-                return
-            }
-            do {
-                let decoded = try JSONDecoder().decode(T.self, from: data)
-                resultHandler(.success(decoded))
-            } catch {
-                resultHandler(.failure(.decode))
-            }
-        }.resume()
-    }
-
-    // MARK: - Combine (Apple platforms only)
-
-#if canImport(Combine)
-    /// Returns a Combine publisher that fetches and decodes a resource.
-    public func sendRequest<T: Decodable & Sendable>(
-        endpoint: EndPoint,
-        type: T.Type
-    ) -> AnyPublisher<T, NetworkError> {
-        guard let urlRequest = createRequest(endPoint: endpoint) else {
-            return Fail(error: .invalidURL).eraseToAnyPublisher()
-        }
-        return session.dataTaskPublisher(for: urlRequest)
-            .tryMap { data, response -> Data in
-                guard let httpResponse = response as? HTTPURLResponse,
-                      200...299 ~= httpResponse.statusCode else {
-                    throw NetworkError.unexpectedStatusCode
-                }
-                return data
-            }
-            .decode(type: T.self, decoder: JSONDecoder())
-            .mapError { error -> NetworkError in
-                if error is DecodingError { return .decode }
-                if let netError = error as? NetworkError { return netError }
-                return .unknown
-            }
-            .eraseToAnyPublisher()
-    }
-#endif
-
-    // MARK: - Private Helpers
-
     private func createRequest(endPoint: EndPoint) -> URLRequest? {
         var urlComponents = URLComponents()
         urlComponents.scheme = endPoint.scheme
         urlComponents.host = endPoint.host
-        urlComponents.path = endPoint.path
         urlComponents.queryItems = endPoint.queryParams?.map {
             URLQueryItem(name: $0.key, value: $0.value)
         }
 
         var path = endPoint.path
         for (key, value) in endPoint.pathParams ?? [:] {
-            path = path.replacingOccurrences(of: "{\(key)}", with: value)
+            let encoded = value.addingPercentEncoding(withAllowedCharacters: .pathParameterAllowed) ?? value
+            path = path.replacingOccurrences(of: "{\(key)}", with: encoded)
         }
         urlComponents.path = path
 
@@ -187,4 +238,11 @@ public final class NetworkService: Networkable, @unchecked Sendable {
         }
         return request
     }
+}
+
+private extension CharacterSet {
+    /// `.urlPathAllowed` permits "/", since it is meant for a whole path. A path
+    /// parameter is a single segment, so "/" must be encoded rather than split it.
+    static let pathParameterAllowed = CharacterSet.urlPathAllowed
+        .subtracting(CharacterSet(charactersIn: "/"))
 }
