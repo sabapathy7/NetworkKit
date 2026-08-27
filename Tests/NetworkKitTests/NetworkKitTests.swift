@@ -94,7 +94,7 @@ final class NetworkServiceTests: XCTestCase {
 
     // MARK: - Closure Tests
 
-    func testSendRequestWithResultHandler_Success() {
+    func testSendRequestWithResultHandler_Success() async {
         let expectedData = "{\"key\":\"value\"}".data(using: .utf8)!
         URLProtocolMock.mockResponse = MockResponse(
             data: expectedData,
@@ -117,10 +117,10 @@ final class NetworkServiceTests: XCTestCase {
             expectation.fulfill()
         }
 
-        waitForExpectations(timeout: 2.0)
+        await fulfillment(of: [expectation], timeout: 2.0)
     }
 
-    func testSendRequestWithResultHandler_Failure() {
+    func testSendRequestWithResultHandler_Failure() async {
         URLProtocolMock.mockResponse = MockResponse(
             data: nil,
             response: nil,
@@ -138,13 +138,13 @@ final class NetworkServiceTests: XCTestCase {
             expectation.fulfill()
         }
 
-        waitForExpectations(timeout: 2.0)
+        await fulfillment(of: [expectation], timeout: 2.0)
     }
 
     // MARK: - Combine Tests (Apple platforms only)
 
 #if canImport(Combine)
-    func testSendRequestWithCombine_Success() {
+    func testSendRequestWithCombine_Success() async {
         let expectedData = "{\"key\":\"value\"}".data(using: .utf8)!
         URLProtocolMock.mockResponse = MockResponse(
             data: expectedData,
@@ -168,10 +168,10 @@ final class NetworkServiceTests: XCTestCase {
             })
             .store(in: &cancellables)
 
-        waitForExpectations(timeout: 2.0)
+        await fulfillment(of: [expectation], timeout: 2.0)
     }
 
-    func testSendRequestWithCombine_Failure() {
+    func testSendRequestWithCombine_Failure() async {
         URLProtocolMock.mockResponse = MockResponse(
             data: nil,
             response: nil,
@@ -192,7 +192,7 @@ final class NetworkServiceTests: XCTestCase {
             })
             .store(in: &cancellables)
 
-        waitForExpectations(timeout: 2.0)
+        await fulfillment(of: [expectation], timeout: 2.0)
         XCTAssertEqual(receivedError, .unknown)
     }
 #endif
