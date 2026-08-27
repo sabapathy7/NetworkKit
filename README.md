@@ -25,7 +25,7 @@ Combine-backed APIs are available only where **Combine** exists (Apple platforms
 **`Package.swift`:**
 
 ```swift
-.package(url: "https://github.com/sabapathy7/NetworkKit.git", from: "1.0.8")
+.package(url: "https://github.com/sabapathy7/NetworkKit.git", from: "2.0.0")
 ```
 
 Use the [Releases](https://github.com/sabapathy7/NetworkKit/releases) page and set `from:` to the lowest version you support (or pin an exact revision if you prefer).
@@ -79,6 +79,24 @@ public protocol Networkable: Sendable {
 }
 ```
 
+## Migrating from 1.x
+
+Every request method is renamed for how it is called, so overloads no longer
+differ only by argument label:
+
+| 1.x | 2.0 |
+|---|---|
+| `sendRequest(urlStr:)` | `sendRequestUsingURLString(_:)` |
+| `sendRequest(endpoint:)` | `sendRequestUsingEndpoint(endpoint:)` |
+| `sendRequest(endpoint:resultHandler:)` | `sendRequestUsingLegacyCallbackAPI(endpoint:resultHandler:)` |
+| `sendRequest(endpoint:type:)` | `sendRequestUsingCombine(endpoint:type:)` |
+
+The endpoint-based async continuation method is removed — `sendRequestUsingEndpoint`
+covers it using `URLSession`'s native async API.
+
+Adapters and retrying come from `NetworkKitCore`, so `import NetworkKitCore`
+where you conform to `RequestAdapting` or `RequestRetrying`.
+
 ## Develop and test locally
 
 ```bash
@@ -88,25 +106,15 @@ swift build
 swift test
 ```
 
-## Ecosystem
+## Links
 
-- **Swift Package Index:** [sabapathy7/NetworkKit](https://swiftpackageindex.com/sabapathy7/NetworkKit)
-- **Repository:** [github.com/sabapathy7/NetworkKit](https://github.com/sabapathy7/NetworkKit)
-
-## Full tutorial and examples
-
+- [Swift Package Index](https://swiftpackageindex.com/sabapathy7/NetworkKit)
 - [Tutorial on Medium](https://sabapathy7.medium.com/how-to-create-a-network-layer-for-your-ios-app-623f99161677)
-- [iOS Network Example](https://github.com/sabapathyk7/iOSNetworkExample)
-- [SOLID Principles Example](https://github.com/sabapathyk7/SOLIDPrinciplesExample)
-- [Force Update App Example](https://github.com/sabapathyk7/ForceUpdateExample)
+- [Kanagasabapathy on LinkedIn](https://www.linkedin.com/in/sabapathy7/)
 
 ## Contributions
 
-Issues and pull requests are welcome on [GitHub](https://github.com/sabapathy7/NetworkKit).
-
-## Connect
-
-[Kanagasabapathy on LinkedIn](https://www.linkedin.com/in/sabapathy7/)
+Issues and pull requests are welcome.
 
 ## License
 
